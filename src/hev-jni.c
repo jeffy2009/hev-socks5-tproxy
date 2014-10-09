@@ -51,7 +51,7 @@ JNI_OnLoad (JavaVM *vm, void *reserved)
 		return 0;
 	}
 
-	klass = (*env)->FindClass (env, "hev/socks5/TProxyService");
+	klass = (*env)->FindClass (env, "hev/htproxy/TProxyService");
 	(*env)->RegisterNatives (env, klass, native_methods, N_ELEMENTS (native_methods));
 	(*env)->DeleteLocalRef (env, klass);
 
