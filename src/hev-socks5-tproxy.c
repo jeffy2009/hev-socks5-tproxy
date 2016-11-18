@@ -25,6 +25,7 @@
 struct _HevSocks5TProxy
 {
 	int listen_fd;
+	int dns_fd;
 	unsigned int ref_count;
 	HevEventSource *listener_source;
 	HevEventSource *timeout_source;
@@ -41,6 +42,7 @@ static void remove_all_sessions (HevSocks5TProxy *self);
 
 HevSocks5TProxy *
 hev_socks5_tproxy_new (HevEventLoop *loop, const char *laddr, unsigned short lport,
+			const char *ldaddr, unsigned short ldport,
 			const char *saddr, unsigned short sport)
 {
 	HevSocks5TProxy *self = HEV_MEMORY_ALLOCATOR_ALLOC (sizeof (HevSocks5TProxy));
@@ -82,6 +84,29 @@ hev_socks5_tproxy_new (HevEventLoop *loop, const char *laddr, unsigned short lpo
 		hev_event_loop_add_source (loop, self->listener_source);
 		hev_event_source_unref (self->listener_source);
 
+		/* dns socket */
+		self->dns_fd = socket (AF_INET, SOCK_DGRAM, 0);
+		if (0 > self->dns_fd) {
+			close (self->listen_fd);
+			HEV_MEMORY_ALLOCATOR_FREE (self);
+			return NULL;
+		}
+		ioctl (self->dns_fd, FIONBIO, (char *) &nonblock);
+		memset (&iaddr, 0, sizeof (iaddr));
+		iaddr.sin_family = AF_INET;
+		iaddr.sin_addr.s_addr = inet_addr (ldaddr);
+		iaddr.sin_port = htons (ldport);
+		if (0 > bind (self->dns_fd, (struct sockaddr *) &iaddr,
+						(socklen_t) sizeof (iaddr))) {
+			close (self->listen_fd);
+			close (self->dns_fd);
+			HEV_MEMORY_ALLOCATOR_FREE (self);
+			return NULL;
+		}
+
+		/* event source fds for dns */
+		hev_event_source_add_fd (self->listener_source, self->dns_fd, EPOLLIN | EPOLLET);
+
 		/* event source timeout */
 		self->timeout_source = hev_event_source_timeout_new (TIMEOUT);
 		hev_event_source_set_priority (self->timeout_source, -1);
@@ -89,9 +114,9 @@ hev_socks5_tproxy_new (HevEventLoop *loop, const char *laddr, unsigned short lpo
 		hev_event_loop_add_source (loop, self->timeout_source);
 		hev_event_source_unref (self->timeout_source);
 
+		self->loop = loop;
 		self->ref_count = 1;
 		self->session_list = NULL;
-		self->loop = loop;
 	}
 
 	return self;
@@ -116,6 +141,7 @@ hev_socks5_tproxy_unref (HevSocks5TProxy *self)
 		if (0 == self->ref_count) {
 			hev_event_loop_del_source (self->loop, self->listener_source);
 			hev_event_loop_del_source (self->loop, self->timeout_source);
+			close (self->dns_fd);
 			close (self->listen_fd);
 			remove_all_sessions (self);
 			HEV_MEMORY_ALLOCATOR_FREE (self);
@@ -130,15 +156,35 @@ listener_source_handler (HevEventSourceFD *fd, void *data)
 	struct sockaddr_in addr;
 	socklen_t addr_len;
 	int client_fd = -1;
+	ssize_t size;
+	HevSocks5SessionMode mode;
 
 	addr_len = sizeof (addr);
-	client_fd = accept (fd->fd, (struct sockaddr *) &addr, (socklen_t *) &addr_len);
-	if (0 > client_fd) {
-		if (EAGAIN == errno)
-		  fd->revents &= ~EPOLLIN;
-		else
-		  printf ("Accept failed!\n");
+	if (fd->fd == self->dns_fd) {
+		size = recvfrom (fd->fd, NULL, 0, MSG_PEEK,
+					(struct sockaddr *) &addr, (socklen_t *) &addr_len);
+		if (-1 == size) {
+			if (EAGAIN == errno)
+			  fd->revents &= ~EPOLLIN;
+			else
+			  printf ("Receive failed!\n");
+			return true;
+		}
+		client_fd = self->dns_fd;
+		mode = HEV_SOCKS5_SESSION_MODE_DNS_FWD;
 	} else {
+		client_fd = accept (fd->fd, (struct sockaddr *) &addr, (socklen_t *) &addr_len);
+		if (0 > client_fd) {
+			if (EAGAIN == errno)
+			  fd->revents &= ~EPOLLIN;
+			else
+			  printf ("Accept failed!\n");
+			return true;
+		}
+		mode = HEV_SOCKS5_SESSION_MODE_CONNECT;
+	}
+
+	if (-1 != client_fd) {
 		HevSocks5Session *session = NULL;
 		HevEventSource *source = NULL;
 		int remote_fd = -1, nonblock = 1;
@@ -149,11 +195,12 @@ listener_source_handler (HevEventSourceFD *fd, void *data)
 		connect (remote_fd, (struct sockaddr *) &self->saddr, sizeof (self->saddr));
 
 		/* new session */
-		session = hev_socks5_session_new (client_fd, remote_fd, session_close_handler, self);
+		session = hev_socks5_session_new (client_fd, remote_fd,
+					mode, session_close_handler, self);
 		source = hev_socks5_session_get_source (session);
 		hev_event_loop_add_source (self->loop, source);
 		/* printf ("New session %p (%d) enter from %s:%u\n", session,
-					client_fd, inet_ntoa (addr.sin_addr), ntohs (addr.sin_port)); */
+				client_fd, inet_ntoa (addr.sin_addr), ntohs (addr.sin_port)); */
 
 		self->session_list = hev_slist_append (self->session_list, session);
 	}

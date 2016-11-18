@@ -16,6 +16,7 @@ typedef struct _HevSocks5TProxy HevSocks5TProxy;
 
 HevSocks5TProxy * hev_socks5_tproxy_new (HevEventLoop *loop,
 			const char *laddr, unsigned short lport,
+			const char *ldaddr, unsigned short ldport,
 			const char *saddr, unsigned short sport);
 
 HevSocks5TProxy * hev_socks5_tproxy_ref (HevSocks5TProxy *self);
