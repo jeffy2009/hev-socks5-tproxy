@@ -25,12 +25,13 @@ static pthread_key_t current_jni_env;
 
 static void native_start_service (JNIEnv *env, jobject thiz,
 			jstring local_address, jint local_port,
+			jstring local_dns_address, jint local_dns_port,
 			jstring socks5_address, jint socks5_port);
 static void native_stop_service (JNIEnv *env, jobject thiz);
 
 static JNINativeMethod native_methods[] =
 {
-	{ "TProxyStartService", "(Ljava/lang/String;ILjava/lang/String;I)V", (void *) native_start_service },
+	{ "TProxyStartService", "(Ljava/lang/String;ILjava/lang/String;ILjava/lang/String;I)V", (void *) native_start_service },
 	{ "TProxyStopService", "()V", (void *) native_stop_service },
 };
 
@@ -67,12 +68,14 @@ thread_handler (void *data)
 
 	argv[0] = "hev-socks5-tproxy";
 
-	main (5, argv);
+	main (7, argv);
 
 	free (argv[1]);
 	free (argv[2]);
 	free (argv[3]);
 	free (argv[4]);
+	free (argv[5]);
+	free (argv[6]);
 	free (argv);
 
 	return NULL;
@@ -81,12 +84,13 @@ thread_handler (void *data)
 static void
 native_start_service (JNIEnv *env, jobject thiz,
 			jstring local_address, jint local_port,
+			jstring local_dns_address, jint local_dns_port,
 			jstring socks5_address, jint socks5_port)
 {
 	char buf[16], **argv;
 	const jbyte *bytes;
 
-	argv = malloc (sizeof (char *) * 5);
+	argv = malloc (sizeof (char *) * 7);
 
 	bytes = (*env)->GetStringUTFChars (env, local_address, NULL);
 	argv[1] = strdup (bytes);
@@ -95,12 +99,19 @@ native_start_service (JNIEnv *env, jobject thiz,
 	snprintf (buf, 16, "%u", local_port);
 	argv[2] = strdup (buf);
 
-	bytes = (*env)->GetStringUTFChars (env, socks5_address, NULL);
+	bytes = (*env)->GetStringUTFChars (env, local_dns_address, NULL);
 	argv[3] = strdup (bytes);
+	(*env)->ReleaseStringUTFChars (env, local_dns_address, bytes);
+
+	snprintf (buf, 16, "%u", local_dns_port);
+	argv[4] = strdup (buf);
+
+	bytes = (*env)->GetStringUTFChars (env, socks5_address, NULL);
+	argv[5] = strdup (bytes);
 	(*env)->ReleaseStringUTFChars (env, socks5_address, bytes);
 
 	snprintf (buf, 16, "%u", socks5_port);
-	argv[4] = strdup (buf);
+	argv[6] = strdup (buf);
 
 	pthread_create (&service, NULL, thread_handler, argv);
 }
