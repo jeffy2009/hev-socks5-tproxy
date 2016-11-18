@@ -16,7 +16,9 @@
 static void
 show_help (const char *app)
 {
-	fprintf (stderr, "%s LOCAL_ADDR LOCAL_PORT SOCKS5_ADDR SOCKS5_PORT\n", app);
+	fprintf (stderr, "%s LOCAL_ADDR LOCAL_PORT " \
+			"LOCAL_DNS_ADDR LOCAL_DNS_PORT " \
+			"SOCKS5_ADDR SOCKS5_PORT\n", app);
 }
 
 static bool
@@ -34,7 +36,7 @@ main (int argc, char *argv[])
 	HevEventSource *source = NULL;
 	HevSocks5TProxy *tproxy = NULL;
 
-	if (5 > argc) {
+	if (7 > argc) {
 		show_help (argv[0]);
 		exit (1);
 	}
@@ -49,7 +51,8 @@ main (int argc, char *argv[])
 	hev_event_loop_add_source (loop, source);
 	hev_event_source_unref (source);
 
-	tproxy = hev_socks5_tproxy_new (loop, argv[1], atoi (argv[2]), argv[3], atoi (argv[4]));
+	tproxy = hev_socks5_tproxy_new (loop, argv[1], atoi (argv[2]),
+				argv[3], atoi (argv[4]), argv[5], atoi (argv[6]));
 	if (tproxy) {
 		hev_event_loop_run (loop);
 		hev_socks5_tproxy_unref (tproxy);
