@@ -35,6 +35,8 @@ enum
 	STEP_READ_AUTH_METHOD,
 	STEP_WRITE_REQUEST,
 	STEP_READ_RESPONSE,
+	STEP_FWD_DNS_REQUEST,
+	STEP_FWD_DNS_RESPONSE,
 	STEP_DO_SPLICE,
 	STEP_CLOSE_SESSION,
 };
@@ -47,37 +49,72 @@ struct _HevSocks5Session
 	unsigned int step;
 	bool idle;
 	uint8_t revents;
+	HevSocks5SessionMode mode;
 	HevEventSourceFD *client_fd;
 	HevEventSourceFD *remote_fd;
 	HevRingBuffer *forward_buffer;
 	HevRingBuffer *backward_buffer;
+	HevRingBuffer *dnsmsg_buffer;
 	HevEventSource *source;
 	HevSocks5SessionCloseNotify notify;
 	void *notify_data;
+	struct sockaddr_in addr;
 };
 
 static bool session_source_socks5_handler (HevEventSourceFD *fd, void *data);
 static bool session_source_splice_handler (HevEventSourceFD *fd, void *data);
 
 HevSocks5Session *
-hev_socks5_session_new (int client_fd, int remote_fd,
+hev_socks5_session_new (int client_fd, int remote_fd, HevSocks5SessionMode mode,
 			HevSocks5SessionCloseNotify notify, void *notify_data)
 {
 	HevSocks5Session *self = HEV_MEMORY_ALLOCATOR_ALLOC (sizeof (HevSocks5Session));
 	if (self) {
+		struct iovec iovec[2];
+		size_t iovec_len = 0;
+		struct msghdr mh;
+		ssize_t size;
+		uint16_t *u16p;
+
 		self->ref_count = 1;
 		self->cfd = client_fd;
 		self->rfd = remote_fd;
 		self->revents = 0;
+		self->mode = mode;
 		self->idle = false;
 		self->client_fd = NULL;
 		self->remote_fd = NULL;
 		self->forward_buffer = hev_ring_buffer_new (2000);
 		self->backward_buffer = hev_ring_buffer_new (2000);
+		self->dnsmsg_buffer = NULL;
 		self->source = NULL;
 		self->step = STEP_NULL;
 		self->notify = notify;
 		self->notify_data = notify_data;
+
+		if (HEV_SOCKS5_SESSION_MODE_DNS_FWD == mode) {
+			self->dnsmsg_buffer = hev_ring_buffer_new (2000);
+			iovec_len = hev_ring_buffer_writing (self->dnsmsg_buffer, iovec);
+			u16p = iovec[0].iov_base;
+			iovec[0].iov_base += 2;
+			iovec[0].iov_len -= 2;
+			memset (&mh, 0, sizeof (mh));
+			mh.msg_iov = iovec;
+			mh.msg_iovlen = iovec_len;
+			mh.msg_name = &self->addr;
+			mh.msg_namelen = sizeof (self->addr);
+			size = recvmsg (self->cfd, &mh, 0);
+			if (-1 == size) {
+				close (self->rfd);
+				hev_ring_buffer_unref (self->forward_buffer);
+				hev_ring_buffer_unref (self->backward_buffer);
+				hev_ring_buffer_unref (self->dnsmsg_buffer);
+				HEV_MEMORY_ALLOCATOR_FREE (self);
+				return NULL;
+			}
+			*u16p = htons (size);
+			hev_ring_buffer_write_finish (self->dnsmsg_buffer, 2 + size);
+		}
 	}
 
 	return self;
@@ -98,10 +135,13 @@ hev_socks5_session_unref (HevSocks5Session *self)
 	if (self) {
 		self->ref_count --;
 		if (0 == self->ref_count) {
-			close (self->cfd);
+			if (HEV_SOCKS5_SESSION_MODE_CONNECT == self->mode)
+			  close (self->cfd);
 			close (self->rfd);
 			hev_ring_buffer_unref (self->forward_buffer);
 			hev_ring_buffer_unref (self->backward_buffer);
+			if (self->dnsmsg_buffer)
+			  hev_ring_buffer_unref (self->dnsmsg_buffer);
 			if (self->source)
 			  hev_event_source_unref (self->source);
 			HEV_MEMORY_ALLOCATOR_FREE (self);
@@ -139,6 +179,12 @@ bool
 hev_socks5_session_get_idle (HevSocks5Session *self)
 {
 	return self ? self->idle : false;
+}
+
+HevSocks5SessionMode
+hev_socks5_session_get_mode (HevSocks5Session *self)
+{
+	return self->mode;
 }
 
 static size_t
@@ -330,22 +376,29 @@ socks5_write_request (HevSocks5Session *self)
 	struct sockaddr_in orig_addr;
 	socklen_t orig_addr_len = sizeof (orig_addr);
 
-	/* get original address */
-	if (0 != getsockopt (self->cfd, SOL_IP, SO_ORIGINAL_DST,
-					(struct sockaddr*) &orig_addr, &orig_addr_len)) {
-		self->step = STEP_CLOSE_SESSION;
-		return false;
+	if (HEV_SOCKS5_SESSION_MODE_CONNECT == self->mode) {
+		/* get original address */
+		if (0 != getsockopt (self->cfd, SOL_IP, SO_ORIGINAL_DST,
+						(struct sockaddr*) &orig_addr,
+						&orig_addr_len)) {
+			self->step = STEP_CLOSE_SESSION;
+			return false;
+		}
 	}
 
 	/* write request to ring buffer */
 	hev_ring_buffer_writing (self->forward_buffer, iovec);
 	data = iovec[0].iov_base;
 	data[0] = 0x05;
-	data[1] = 0x01;
 	data[2] = 0x00;
 	data[3] = 0x01;
-	memcpy (data+4, &orig_addr.sin_addr, 4);
-	memcpy (data+8, &orig_addr.sin_port, 2);
+	if (HEV_SOCKS5_SESSION_MODE_CONNECT == self->mode) {
+		data[1] = 0x01;
+		memcpy (data+4, &orig_addr.sin_addr, 4);
+		memcpy (data+8, &orig_addr.sin_port, 2);
+	} else {
+		data[1] = 0x04;
+	}
 	hev_ring_buffer_write_finish (self->forward_buffer, 10);
 
 	self->step = STEP_READ_RESPONSE;
@@ -373,7 +426,75 @@ socks5_read_response (HevSocks5Session *self)
 	  return true;
 	hev_ring_buffer_read_finish (self->backward_buffer, 10);
 
-	self->step = STEP_DO_SPLICE;
+	if (HEV_SOCKS5_SESSION_MODE_CONNECT == self->mode)
+	  self->step = STEP_DO_SPLICE;
+	else
+	  self->step = STEP_FWD_DNS_REQUEST;
+
+	return false;
+}
+
+static inline bool
+socks5_fwd_dns_request (HevSocks5Session *self)
+{
+	HevRingBuffer *buffer;
+
+	/* swap forward_buffer and dnsmsg_buffer */
+	buffer = self->forward_buffer;
+	self->forward_buffer = self->dnsmsg_buffer;
+	self->dnsmsg_buffer = buffer;
+
+	self->step = STEP_FWD_DNS_RESPONSE;
+
+	return false;
+}
+
+static inline bool
+socks5_fwd_dns_response (HevSocks5Session *self)
+{
+	struct iovec iovec[2];
+	size_t iovec_len = 0, size;
+	struct msghdr mh;
+	uint16_t request_size;
+
+	iovec_len = hev_ring_buffer_reading (self->backward_buffer, iovec);
+	size = iovec_size (iovec, iovec_len);
+	if (2 > size)
+	  return true;
+
+	if (2 <= iovec[0].iov_len) {
+		request_size = ntohs (*(uint16_t *) iovec[0].iov_base);
+	} else {
+		uint8_t *u8p = (uint8_t *) &request_size;
+		u8p[0] = *(uint8_t *) iovec[0].iov_base;
+		u8p[1] = *(uint8_t *) iovec[1].iov_base;
+		request_size = ntohs (request_size);
+	}
+	if ((request_size + 2) > size)
+	  return true;
+
+	/* clear dns request header */
+	hev_ring_buffer_read_finish (self->backward_buffer, 2);
+
+	iovec_len = hev_ring_buffer_reading (self->backward_buffer, iovec);
+	if (request_size <= iovec[0].iov_len) {
+		iovec[0].iov_len = request_size;
+		iovec_len = 1;
+	} else {
+		iovec[1].iov_len = request_size - iovec[0].iov_len;
+		iovec_len = 2;
+	}
+
+	memset (&mh, 0, sizeof (mh));
+	mh.msg_iov = iovec;
+	mh.msg_iovlen = iovec_len;
+	mh.msg_name = &self->addr;
+	mh.msg_namelen = sizeof (self->addr);
+	sendmsg (self->cfd, &mh, 0);
+
+	hev_ring_buffer_read_finish (self->backward_buffer, request_size);
+
+	self->step = STEP_CLOSE_SESSION;
 
 	return false;
 }
@@ -420,6 +541,12 @@ handle_socks5 (HevSocks5Session *self)
 		break;
 	case STEP_READ_RESPONSE:
 		wait = socks5_read_response (self);
+		break;
+	case STEP_FWD_DNS_REQUEST:
+		wait = socks5_fwd_dns_request (self);
+		break;
+	case STEP_FWD_DNS_RESPONSE:
+		wait = socks5_fwd_dns_response (self);
 		break;
 	case STEP_DO_SPLICE:
 		wait = socks5_do_splice (self);
