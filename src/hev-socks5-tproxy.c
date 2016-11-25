@@ -57,13 +57,15 @@ hev_socks5_tproxy_new (HevEventLoop *loop, const char *laddr, unsigned short lpo
 			return NULL;
 		}
 		ioctl (self->listen_fd, FIONBIO, (char *) &nonblock);
-		setsockopt (self->listen_fd, SOL_SOCKET, SO_REUSEADDR, &reuseaddr, sizeof (reuseaddr));
+		setsockopt (self->listen_fd, SOL_SOCKET, SO_REUSEADDR,
+					&reuseaddr, sizeof (reuseaddr));
 		memset (&iaddr, 0, sizeof (iaddr));
 		iaddr.sin_family = AF_INET;
 		iaddr.sin_addr.s_addr = inet_addr (laddr);
 		iaddr.sin_port = htons (lport);
-		if ((0 > bind (self->listen_fd, (struct sockaddr *) &iaddr, (socklen_t) sizeof (iaddr))) ||
-					(0 > listen (self->listen_fd, 100))) {
+		if ((0 > bind (self->listen_fd, (struct sockaddr *) &iaddr, sizeof (iaddr))) ||
+					(0 > listen (self->listen_fd, 100)))
+		{
 			close (self->listen_fd);
 			HEV_MEMORY_ALLOCATOR_FREE (self);
 			return NULL;
@@ -110,7 +112,8 @@ hev_socks5_tproxy_new (HevEventLoop *loop, const char *laddr, unsigned short lpo
 		/* event source timeout */
 		self->timeout_source = hev_event_source_timeout_new (TIMEOUT);
 		hev_event_source_set_priority (self->timeout_source, -1);
-		hev_event_source_set_callback (self->timeout_source, timeout_source_handler, self, NULL);
+		hev_event_source_set_callback (self->timeout_source,
+					timeout_source_handler, self, NULL);
 		hev_event_loop_add_source (loop, self->timeout_source);
 		hev_event_source_unref (self->timeout_source);
 
