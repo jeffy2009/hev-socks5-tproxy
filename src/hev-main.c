@@ -12,6 +12,7 @@
 
 #include "hev-main.h"
 #include "hev-socks5-tproxy.h"
+#include "hev-memory-allocator-slice.h"
 
 static void
 show_help (const char *app)
@@ -32,6 +33,7 @@ signal_handler (void *data)
 int
 main (int argc, char *argv[])
 {
+	HevMemoryAllocator *allocator;
 	HevEventLoop *loop = NULL;
 	HevEventSource *source = NULL;
 	HevSocks5TProxy *tproxy = NULL;
@@ -39,6 +41,13 @@ main (int argc, char *argv[])
 	if (7 > argc) {
 		show_help (argv[0]);
 		exit (1);
+	}
+
+	allocator = hev_memory_allocator_slice_new ();
+	if (allocator) {
+		allocator = hev_memory_allocator_set_default (allocator);
+		if (allocator)
+		  hev_memory_allocator_unref (allocator);
 	}
 
 	loop = hev_event_loop_new ();
