@@ -26,7 +26,8 @@ LOCAL_SRC_FILES := \
 	src/hev-jni.c \
 	src/hev-main.c \
 	src/hev-socks5-tproxy.c \
-	src/hev-socks5-session.c
+	src/hev-socks5-session.c \
+	src/hev-memory-allocator-slice.c
 LOCAL_C_INCLUDES := ../hev-lib/jni/include
 LOCAL_STATIC_LIBRARIES := hev-lib
 include $(BUILD_SHARED_LIBRARY)
