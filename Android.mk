@@ -17,7 +17,7 @@ LOCAL_PATH := $(call my-dir)
 
 include $(CLEAR_VARS)
 LOCAL_MODULE    := libhev-lib
-LOCAL_SRC_FILES := ../../hev-lib/obj/local/armeabi-v7a/libhev-lib.a
+LOCAL_SRC_FILES := ../../hev-lib/obj/local/$(TARGET_ARCH_ABI)/libhev-lib.a
 include $(PREBUILT_STATIC_LIBRARY)
 
 include $(CLEAR_VARS)
@@ -29,6 +29,9 @@ LOCAL_SRC_FILES := \
 	src/hev-socks5-session.c \
 	src/hev-memory-allocator-slice.c
 LOCAL_C_INCLUDES := ../hev-lib/jni/include
+ifeq ($(TARGET_ARCH_ABI),armeabi-v7a)
+LOCAL_CFLAGS += -mfpu=neon
+endif
 LOCAL_STATIC_LIBRARIES := hev-lib
 include $(BUILD_SHARED_LIBRARY)
 
