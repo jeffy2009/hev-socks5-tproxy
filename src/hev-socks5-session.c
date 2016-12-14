@@ -20,7 +20,14 @@
 
 #include "hev-socks5-session.h"
 
+typedef enum _HevSocks5SessionStatus HevSocks5SessionStatus;
 typedef void (*HevSocks5SessionHandler) (HevSocks5Session *self);
+
+enum _HevSocks5SessionStatus
+{
+	HEV_SOCKS5_SESSION_CLIENT_EXCP = (1 << 0),
+	HEV_SOCKS5_SESSION_REMOTE_EXCP = (1 << 1),
+};
 
 struct _HevSocks5Session
 {
@@ -28,6 +35,7 @@ struct _HevSocks5Session
 	int rfd;
 	unsigned int ref_count;
 	bool idle;
+	HevSocks5SessionStatus status;
 	HevSocks5SessionMode mode;
 	HevEventSourceFD *client_fd;
 	HevEventSourceFD *remote_fd;
@@ -64,6 +72,7 @@ hev_socks5_session_new (int client_fd, int remote_fd, HevSocks5SessionMode mode,
 		self->rfd = remote_fd;
 		self->mode = mode;
 		self->idle = false;
+		self->status = 0;
 		self->client_fd = NULL;
 		self->remote_fd = NULL;
 		self->forward_buffer = hev_ring_buffer_new (2000);
@@ -223,12 +232,22 @@ session_source_socks5_connect_handler (HevEventSourceFD *fd, void *data)
 	if ((EPOLLIN & self->remote_fd->revents) || (EPOLLOUT & self->client_fd->revents))
 	  self->bhandler (self);
 
-	if ((EPOLLERR | EPOLLHUP) & self->client_fd->revents)
+	if ((EPOLLERR | EPOLLHUP) & self->client_fd->revents) {
+		self->status |= HEV_SOCKS5_SESSION_CLIENT_EXCP;
+		self->client_fd->revents = 0;
+	}
+	if ((EPOLLERR | EPOLLHUP) & self->remote_fd->revents) {
+		self->status |= HEV_SOCKS5_SESSION_REMOTE_EXCP;
+		self->remote_fd->revents = 0;
+	}
+	if (self->status & HEV_SOCKS5_SESSION_CLIENT_EXCP) {
 	  if (sync_ring_buffer (self->remote_fd, self->client_fd, self->forward_buffer))
 	    goto notify;
-	if ((EPOLLERR | EPOLLHUP) & self->remote_fd->revents)
+	}
+	if (self->status & HEV_SOCKS5_SESSION_REMOTE_EXCP) {
 	  if (sync_ring_buffer (self->client_fd, self->remote_fd, self->backward_buffer))
 	    goto notify;
+	}
 
 	self->idle = false;
 
