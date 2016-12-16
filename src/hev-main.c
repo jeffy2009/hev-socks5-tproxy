@@ -12,7 +12,7 @@
 
 #include "hev-main.h"
 #include "hev-socks5-tproxy.h"
-#include "hev-memory-allocator-slice.h"
+#include <hev-memory-allocator-slice.h>
 
 static void
 show_help (const char *app)
