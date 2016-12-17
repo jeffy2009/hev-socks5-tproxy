@@ -26,8 +26,7 @@ LOCAL_SRC_FILES := \
 	src/hev-jni.c \
 	src/hev-main.c \
 	src/hev-socks5-tproxy.c \
-	src/hev-socks5-session.c \
-	src/hev-memory-allocator-slice.c
+	src/hev-socks5-session.c
 LOCAL_C_INCLUDES := ../hev-lib/jni/include
 ifeq ($(TARGET_ARCH_ABI),armeabi-v7a)
 LOCAL_CFLAGS += -mfpu=neon
